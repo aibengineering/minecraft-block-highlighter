@@ -12,22 +12,21 @@ routes or control the bot.
 
 - Minecraft Java Edition **1.21.4** with **NeoForge 21.4.157** (the build target).
 - **Java 21** to build and run the mod.
-- **Bun 1.4.0** for development and tests. Package builds also work with npm.
-- The built package uses **ES modules** and targets **Node.js 20+** or Bun.
-  Tests currently run under Bun.
+- **Bun 1.4.0 or newer** to install, run, and develop the TypeScript package.
+- The package exports TypeScript source as ES modules, matching Mine Labs.
+  Plain Node.js execution is not a supported installation target.
 
 This is an initial candidate. Other Minecraft versions and loaders are not
 supported. In-game reconnect verification and playthrough overhead measurement
 remain outstanding; passing builds do not establish those results.
 
-## Build from source
+## Develop from source and build the mod
 
 From the repository root:
 
 ```sh
 bun install --frozen-lockfile
 bun run test
-bun run build
 ```
 
 Build the mod on Windows:
@@ -62,36 +61,20 @@ This package is not published on npm yet. Install it directly from the private
 [aibengineering/minecraft-block-highlighter repository](https://github.com/aibengineering/minecraft-block-highlighter):
 
 ```sh
-npm install "git+https://github.com/aibengineering/minecraft-block-highlighter.git#main"
+bun add "git+https://github.com/aibengineering/minecraft-block-highlighter.git#main"
 ```
 
-You need Git, Node.js 20+, npm, and a GitHub account with access to this private
+You need Git, Bun 1.4.0 or newer, and a GitHub account with access to this private
 repository. Authenticate Git over HTTPS using your credential manager. If you
 use GitHub CLI, run `gh auth login` followed by `gh auth setup-git` first.
-The installation builds JavaScript and type declarations automatically using
-`prepare`; installation scripts must be enabled. Bun is used for development
-and tests but is not needed for this npm installation path.
+
+Bun runs the exported `src/index.ts` directly. There is no generated `dist/`,
+install-time build, or dependency lifecycle script to enable. Run your consuming
+application with Bun, for example `bun run app.ts`.
 
 `#main` installs the current main branch. Replace it with a full commit SHA to
 select a specific revision. Import the installed package using
 `@aibengineering/minecraft-block-highlighter`, as in the examples below.
-
-Alternatively, clone and pack it yourself, then install the tarball with npm or Bun:
-
-```sh
-git clone https://github.com/aibengineering/minecraft-block-highlighter.git
-cd minecraft-block-highlighter
-bun install --frozen-lockfile
-npm pack
-```
-
-From your consuming project:
-
-```sh
-npm install /path/to/aibengineering-minecraft-block-highlighter-0.1.0.tgz
-# Or:
-bun add /path/to/aibengineering-minecraft-block-highlighter-0.1.0.tgz
-```
 
 The Minecraft mod JAR is built and installed separately as described above.
 
@@ -197,9 +180,9 @@ quickly by default (700 ms); use a longer `holdMs` while checking setup.
 
 ## Development
 
-`bun run test` runs typechecking and the TypeScript tests. `bun run build` emits
-`dist/`. The CI workflow builds both components on Windows and Linux; the Java
-build currently has no automated gameplay tests.
+`bun run test` runs typechecking and the TypeScript tests. No JavaScript build
+is required. CI checks the source package and builds the mod on Windows and
+Linux; the Java build currently has no automated gameplay tests.
 
 For bug reports, include Minecraft/NeoForge versions, runtime version, the setup
 steps, and a minimal reproduction. A real in-game screenshot or recording is

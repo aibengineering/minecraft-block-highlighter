@@ -19,7 +19,6 @@ jobs:
           java-version: '21'
       - run: bun install --frozen-lockfile
       - run: bun run test
-      - run: bun run build
       - run: npm pack --dry-run
       - name: Build mod (Linux)
         if: runner.os != 'Windows'
