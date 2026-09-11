@@ -1,0 +1,103 @@
+import { describe, expect, test, afterEach } from "bun:test";
+import { BlockHighlighter } from "./highlighter.js";
+
+describe("paths", () => {
+  test("are carried in the same snapshot as the highlights", () => {
+    const highlighter = new BlockHighlighter();
+    highlighter.publishPath({ points: [{ x: 1, y: 2, z: 3 }] });
+    // One poll, both overlays: what a client draws is its own decision.
+    expect(highlighter.snapshot().path?.points).toEqual([{ x: 1, y: 2, z: 3 }]);
+  });
+
+  test("replace one another rather than accumulating", () => {
+    const highlighter = new BlockHighlighter();
+    highlighter.publishPath({ points: [{ x: 0, y: 0, z: 0 }] });
+    highlighter.publishPath({ points: [{ x: 9, y: 9, z: 9 }] });
+    const path = highlighter.snapshot().path;
+    expect(path?.points).toEqual([{ x: 9, y: 9, z: 9 }]);
+    expect(path?.revision).toBe(2);
+  });
+
+  test("clear back to nothing", () => {
+    const highlighter = new BlockHighlighter();
+    highlighter.publishPath({ points: [{ x: 0, y: 0, z: 0 }] });
+    highlighter.clearPath();
+    expect(highlighter.snapshot().path).toBeNull();
+  });
+});
+
+describe("BlockHighlighter Server & HTTP API", () => {
+  let highlighter: BlockHighlighter | undefined;
+
+  afterEach(async () => {
+    if (highlighter) {
+      await highlighter.stopServer();
+      highlighter = undefined;
+    }
+  });
+
+  test("concurrent starts share a listener and immediate stops await its closure", async () => {
+    highlighter = new BlockHighlighter({ port: 0 });
+    const starting = highlighter.startServer();
+    expect(highlighter.startServer()).toBe(starting);
+    const stopping = highlighter.stopServer();
+    expect(highlighter.stopServer()).toBe(stopping);
+    const server = await starting;
+    await stopping;
+    expect(server.listening).toBe(false);
+    const restarted = await highlighter.startServer();
+    expect(restarted.listening).toBe(true);
+    expect(restarted).not.toBe(server);
+  });
+
+  test("a host can serve the feed from its own listener", () => {
+    const feed = new BlockHighlighter();
+
+    // Nobody has read the feed, so nothing is watching and a scope is inert.
+    expect(feed.listening()).toBe(false);
+    expect(feed.scope().enabled).toBe(false);
+    expect(feed.handle("GET", "/anything/else")).toBe(null);
+
+    const answer = feed.handle("GET", "/debug/api/highlights");
+
+    expect(answer?.status).toBe(200);
+    // Reading the feed is what turns highlighting on.
+    expect(feed.listening()).toBe(true);
+    expect(feed.scope().enabled).toBe(true);
+  });
+
+  test("starts standalone server and responds to /debug/api/highlights", async () => {
+    highlighter = new BlockHighlighter({ port: 25588 });
+    await highlighter.startServer();
+
+    await highlighter.publish([
+      { x: 10, y: 64, z: 20, colour: "#1f8cff" },
+    ], { label: "Test Approaching" });
+
+    const response = await fetch("http://127.0.0.1:25588/debug/api/highlights");
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as any;
+    expect(data.label).toBe("Test Approaching");
+    expect(data.highlights).toEqual([
+      expect.objectContaining({ x: 10, y: 64, z: 20, colour: "#1f8cff" }),
+    ]);
+  });
+
+});
+
+describe("highlight hold", () => {
+  test("the caller decides how long its highlight stays up", async () => {
+    const highlighter = new BlockHighlighter();
+    await highlighter.publish([{ x: 0, y: 0, z: 0, colour: "#ffffff" }], { holdMs: 5_000 });
+    const [highlight] = highlighter.snapshot().highlights;
+    const held = highlight.expiresAt - (highlight.visibleAt ?? 0);
+    expect(held).toBeGreaterThanOrEqual(4_900);
+  });
+
+  test("a caller that says nothing gets the brief default", async () => {
+    const highlighter = new BlockHighlighter();
+    await highlighter.publish([{ x: 0, y: 0, z: 0, colour: "#ffffff" }]);
+    const [highlight] = highlighter.snapshot().highlights;
+    expect(highlight.expiresAt - (highlight.visibleAt ?? 0)).toBe(700);
+  });
+});

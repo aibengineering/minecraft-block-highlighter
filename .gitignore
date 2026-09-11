@@ -1,0 +1,7 @@
+node_modules
+dist
+.gradle
+build
+*.jar
+!gradle/wrapper/*.jar
+.DS_Store
