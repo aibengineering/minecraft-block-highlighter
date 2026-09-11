@@ -61,12 +61,25 @@ This package is not published on npm yet. Install it directly from the private
 [aibengineering/minecraft-block-highlighter repository](https://github.com/aibengineering/minecraft-block-highlighter):
 
 ```sh
-bun add "git+https://github.com/aibengineering/minecraft-block-highlighter.git#main"
+bun add "git+https://aibengineering@github.com/aibengineering/minecraft-block-highlighter.git#main"
 ```
 
 You need Git, Bun 1.4.0 or newer, and a GitHub account with access to this private
 repository. Authenticate Git over HTTPS using your credential manager. If you
 use GitHub CLI, run `gh auth login` followed by `gh auth setup-git` first.
+Replace the first `aibengineering` (before `@github.com`) with your authenticated
+GitHub username if different; keep the repository owner after `github.com/`
+unchanged. Including the username makes Bun use Git authentication instead of
+the GitHub archive shortcut, which returned 404 for this private repository.
+The command above was verified with Bun 1.4.0 and the `aibengineering` account.
+
+If your Git authentication works for cloning but not for Bun, clone the repo
+and add the local source directory from your consuming project:
+
+```sh
+git clone https://github.com/aibengineering/minecraft-block-highlighter.git ../minecraft-block-highlighter
+bun add ../minecraft-block-highlighter
+```
 
 Bun runs the exported `src/index.ts` directly. There is no generated `dist/`,
 install-time build, or dependency lifecycle script to enable. Run your consuming
