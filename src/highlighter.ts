@@ -38,6 +38,7 @@ export class BlockHighlighter {
   }
 
   port: number;
+  host: string;
   maxHighlights: number;
   listenerTimeoutMs: number;
 
@@ -58,6 +59,7 @@ export class BlockHighlighter {
 
   constructor(options: BlockHighlighterOptions = {}, currentDimension: () => string | undefined = () => undefined) {
     this.port = options.port ?? DEFAULT_BLOCK_HIGHLIGHTER_PORT;
+    this.host = options.host ?? "127.0.0.1";
     this.maxHighlights = options.maxHighlights ?? 768;
     this.listenerTimeoutMs = options.listenerTimeoutMs ?? DEFAULT_LISTENER_TIMEOUT_MS;
     this.#currentDimension = currentDimension;
@@ -269,7 +271,7 @@ export class BlockHighlighter {
       });
 
       server.once("error", reject);
-      server.listen(this.port, "127.0.0.1", () => {
+      server.listen(this.port, this.host, () => {
         this.#server = server;
         resolve(server);
       });

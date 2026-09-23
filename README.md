@@ -236,7 +236,7 @@ If nothing appears, check the feed URL in a browser, inspect `ready.error`, conf
 the world/dimension and coordinates, and check the N/O toggles. Highlights expire
 quickly by default (700 ms); use a longer `holdMs` while checking setup.
 
-For local multi-server viewing, set JVM property `blockhighlighter.serverPortOffset` to an integer (for example `10000`). The mod polls loopback at the connected Minecraft server port plus that offset and follows reconnects. Without it, `blockhighlighter.url` and its existing default remain unchanged. The feed host must use the same mapping.
+For multi-server viewing, set JVM property `blockhighlighter.serverPortOffset` to an integer (for example `10000`). The mod polls the connected Minecraft server's host at its port plus that offset and follows reconnects. The property may also be set after startup, as Mine Labs does for a client in Tailscale remote mode. A feed watched from another machine must listen on an address that machine can reach: pass `{ host }` to the highlighter, such as the game server's own address. Without it, `blockhighlighter.url` and its existing default remain unchanged. The feed host must use the same mapping.
 
 ## Behaviour and limits
 

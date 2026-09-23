@@ -29,7 +29,6 @@ final class HighlightStore {
             .connectTimeout(Duration.ofMillis(250))
             .build();
     private final URI fixedEndpoint = URI.create(System.getProperty("blockhighlighter.url", DEFAULT_ENDPOINT));
-    private final Integer serverPortOffset = Integer.getInteger("blockhighlighter.serverPortOffset");
     private volatile Snapshot snapshot = Snapshot.empty();
     private boolean requestInFlight;
     private long nextPollAt;
@@ -72,14 +71,22 @@ final class HighlightStore {
                 });
     }
 
-    /** Local test hosts can expose a feed per game port; reconnecting follows the viewed world. */
+    /**
+     * Test hosts can expose a feed per game port; reconnecting follows the viewed world.
+     *
+     * The feed lives on the game server's machine, which is not this one when a
+     * lab is watched from another device. The offset is read on every poll
+     * because such a lab supplies it after startup rather than at launch.
+     */
     private URI endpoint(Minecraft minecraft) {
+        Integer serverPortOffset = Integer.getInteger("blockhighlighter.serverPortOffset");
         if (serverPortOffset == null) return fixedEndpoint;
         var server = minecraft.getCurrentServer();
         if (server == null) return null;
-        long port = (long) ServerAddress.parseString(server.ip).getPort() + serverPortOffset;
+        ServerAddress address = ServerAddress.parseString(server.ip);
+        long port = (long) address.getPort() + serverPortOffset;
         if (port < 1 || port > 65535) return null;
-        return URI.create("http://127.0.0.1:" + port + "/debug/api/highlights");
+        return URI.create("http://" + address.getHost() + ":" + port + "/debug/api/highlights");
     }
 
     Snapshot snapshot() {

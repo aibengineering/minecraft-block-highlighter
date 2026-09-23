@@ -80,6 +80,8 @@ export interface BlockHighlighterFeedSnapshot {
 
 export interface BlockHighlighterOptions {
   port?: number;
+  /** Listen address for the standalone feed. Loopback unless a viewer on another machine polls it. */
+  host?: string;
   /** How long after a poll a client still counts as watching. */
   listenerTimeoutMs?: number;
   maxHighlights?: number;

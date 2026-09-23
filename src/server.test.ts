@@ -84,6 +84,14 @@ describe("BlockHighlighter Server & HTTP API", () => {
     ]);
   });
 
+  test("standalone server listens on the configured host", async () => {
+    highlighter = new BlockHighlighter({ port: 0, host: "127.0.0.1" });
+    const server = await highlighter.startServer();
+    const address = server.address();
+    expect(typeof address === "object" && address?.address).toBe("127.0.0.1");
+    expect(new BlockHighlighter().host).toBe("127.0.0.1");
+  });
+
 });
 
 describe("highlight hold", () => {
