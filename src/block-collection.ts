@@ -279,6 +279,7 @@ export class BlockCollection<T extends HighlightableBlock = HighlightableBlock> 
       signal: abortSignal,
       step: options.step ?? ambient?.step,
       revealIntervalMs: options.revealIntervalMs,
+      lifetime: options.lifetime,
       // Held for whoever is watching, so only the caller has an opinion on it.
       holdMs: options.holdMs,
       waitUntil: options.waitUntil,

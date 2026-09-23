@@ -1,4 +1,5 @@
 import { describe, expect, test, afterEach } from "bun:test";
+import type { HighlightFrame } from "./types.js";
 import { BlockHighlighter } from "./highlighter.js";
 
 describe("paths", () => {
@@ -86,6 +87,53 @@ describe("BlockHighlighter Server & HTTP API", () => {
 });
 
 describe("highlight hold", () => {
+  test("persistent highlights survive elapsed time, serialize, and clear without clearing paths", async () => {
+    const highlighter = new BlockHighlighter();
+    highlighter.publishPath({ points: [{ x: 1, y: 2, z: 3 }] });
+    await highlighter.publish([{ x: 0, y: 0, z: 0, colour: "#ffffff" }], {
+      label: "Current targets", lifetime: "until-cleared",
+    });
+    const snapshot = JSON.parse(JSON.stringify(highlighter.snapshot()));
+    expect(snapshot.highlights[0].expiresAt).toBeGreaterThan(Date.now() + 60_000);
+    const revision = snapshot.revision;
+    highlighter.clearHighlights();
+    expect(highlighter.snapshot().highlights).toEqual([]);
+    expect(highlighter.snapshot().label).toBe("");
+    expect(highlighter.snapshot().revision).toBeGreaterThan(revision);
+    expect(highlighter.snapshot().path?.points).toEqual([{ x: 1, y: 2, z: 3 }]);
+  });
+
+  test("aborting the current owner clears its persistent highlights", async () => {
+    const highlighter = new BlockHighlighter();
+    const owner = new AbortController();
+    await highlighter.publish([{ x: 0, y: 0, z: 0, colour: "#ffffff" }], {
+      lifetime: "until-cleared", signal: owner.signal,
+    });
+    owner.abort();
+    expect(highlighter.snapshot().highlights).toEqual([]);
+  });
+
+  test("an old owner's abort cannot erase a newer publication", async () => {
+    const highlighter = new BlockHighlighter();
+    const old = new AbortController();
+    await highlighter.publish([{ x: 0, y: 0, z: 0, colour: "#ffffff" }], {
+      lifetime: "until-cleared", signal: old.signal,
+    });
+    await highlighter.publish([{ x: 9, y: 0, z: 0, colour: "#ffffff" }]);
+    old.abort();
+    expect(highlighter.snapshot().highlights[0]?.x).toBe(9);
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await expect(highlighter.publish([], { lifetime: "until-cleared", signal: cancelled.signal })).rejects.toBeDefined();
+    expect(highlighter.snapshot().highlights[0]?.x).toBe(9);
+  });
+
+  test("persistent highlights reject expiration waits and conflicting timers", async () => {
+    const highlighter = new BlockHighlighter();
+    await expect(highlighter.publish([], { lifetime: "until-cleared", waitUntil: "expired" })).rejects.toThrow("until-cleared");
+    await expect(highlighter.publish([], { lifetime: "until-cleared", holdMs: 1 })).rejects.toThrow("until-cleared");
+  });
+
   test("the caller decides how long its highlight stays up", async () => {
     const highlighter = new BlockHighlighter();
     await highlighter.publish([{ x: 0, y: 0, z: 0, colour: "#ffffff" }], { holdMs: 5_000 });
@@ -99,5 +147,67 @@ describe("highlight hold", () => {
     await highlighter.publish([{ x: 0, y: 0, z: 0, colour: "#ffffff" }]);
     const [highlight] = highlighter.snapshot().highlights;
     expect(highlight.expiresAt - (highlight.visibleAt ?? 0)).toBe(700);
+  });
+});
+
+
+describe("live selections", () => {
+  test("a failing display source is detached without throwing into its host", () => {
+    const highlighter = new BlockHighlighter();
+    let reads = 0;
+    highlighter.followHighlights(() => { reads++; throw new Error("broken observer"); }, new AbortController().signal);
+    expect(highlighter.handle("GET", "/debug/api/highlights")?.status).toBe(500);
+    expect(highlighter.handle("GET", "/debug/api/highlights")?.status).toBe(200);
+    expect(reads).toBe(1);
+    expect(highlighter.snapshot().entities).toEqual([]);
+  });
+
+  test("do no display work without polls, catch up on late joins, and reuse unchanged frames", () => {
+    const highlighter = new BlockHighlighter({}, () => "overworld");
+    const owner = new AbortController();
+    let reads = 0;
+    let frame: HighlightFrame = { label: "Mining", blocks: [{ x: 1, y: 2, z: 3, colour: "#ffaa0d" }], entities: [] };
+    highlighter.followHighlights(() => { reads++; return frame; }, owner.signal);
+    expect(reads).toBe(0);
+    frame = { label: "Pickup", blocks: [], entities: [{ entityId: 42, colour: "#33ff61" }] };
+    expect(reads).toBe(0);
+    highlighter.handle("GET", "/debug/api/highlights");
+    expect(reads).toBe(1);
+    expect(highlighter.snapshot().highlights).toEqual([]);
+    expect(highlighter.snapshot().entities).toEqual([{ entityId: 42, colour: "#33ff61", dimension: "overworld" }]);
+    const previous = highlighter.snapshot();
+    highlighter.handle("GET", "/debug/api/highlights");
+    expect(highlighter.snapshot().revision).toBe(previous.revision);
+    expect(highlighter.snapshot().entities).toBe(previous.entities);
+    owner.abort();
+    highlighter.handle("GET", "/debug/api/highlights");
+    expect(reads).toBe(2);
+    expect(highlighter.snapshot().entities).toEqual([]);
+  });
+
+  test("replacing a live source releases its owner and bounds mixed geometry", async () => {
+    const highlighter = new BlockHighlighter({ maxHighlights: 2 });
+    const old = new AbortController();
+    highlighter.followHighlights(() => ({ label: "", blocks: [], entities: [] }), old.signal);
+    const current = new AbortController();
+    highlighter.followHighlights(() => ({ label: "Mixed", blocks: [{ x: 0, y: 0, z: 0, colour: "#ffffff" }], entities: [
+      { entityId: 1, colour: "#ffffff" }, { entityId: 2, colour: "#ffffff" },
+    ] }), current.signal);
+    old.abort();
+    highlighter.handle("GET", "/debug/api/highlights");
+    expect(highlighter.snapshot().entities.length).toBe(1);
+    await highlighter.publish([{ x: 5, y: 0, z: 0, colour: "#ffffff" }]);
+    current.abort();
+    highlighter.handle("GET", "/debug/api/highlights");
+    expect(highlighter.snapshot().entities).toEqual([]);
+    expect(highlighter.snapshot().highlights[0]?.x).toBe(5);
+  });
+
+  test("a scope notices a listener joining after the action starts", () => {
+    const highlighter = new BlockHighlighter();
+    const scope = highlighter.scope();
+    expect(scope.enabled).toBe(false);
+    highlighter.observePoll();
+    expect(scope.enabled).toBe(true);
   });
 });

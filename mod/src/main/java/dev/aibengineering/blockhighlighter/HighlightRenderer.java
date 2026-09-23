@@ -19,7 +19,7 @@ final class HighlightRenderer {
     }
 
     static void render(RenderLevelStageEvent event, HighlightStore.Snapshot snapshot) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES || snapshot.highlights().isEmpty()) return;
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES || (snapshot.highlights().isEmpty() && snapshot.entities().isEmpty())) return;
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null) return;
         String currentDimension = minecraft.level.dimension().location().toString();
@@ -57,6 +57,18 @@ final class HighlightRenderer {
                     highlight.y() + 1 - camera.y + 0.01,
                     highlight.z() + 1 - camera.z + 0.01);
             HighlightStore.Colour colour = highlight.colour();
+            ShapeRenderer.renderLineBox(poseStack, lines, box, colour.red(), colour.green(), colour.blue(), 1.0F);
+        }
+        // Entity IDs are resolved in the spectator's world. Their live bounds
+        // follow falling/moving items without host-side position publications.
+        for (HighlightStore.EntityHighlight highlight : snapshot.entities()) {
+            if (!sameDimension(highlight.dimension(), currentDimension)) continue;
+            var entity = minecraft.level.getEntity(highlight.entityId());
+            if (entity == null || entity.isRemoved()) continue;
+            var position = entity.getPosition(event.getPartialTick().getGameTimeDeltaPartialTick(false));
+            AABB box = entity.getBoundingBox().move(position.subtract(entity.position()))
+                    .inflate(0.03).move(-camera.x, -camera.y, -camera.z);
+            var colour = highlight.colour();
             ShapeRenderer.renderLineBox(poseStack, lines, box, colour.red(), colour.green(), colour.blue(), 1.0F);
         }
         buffers.endBatch(renderType);
@@ -97,7 +109,7 @@ final class HighlightRenderer {
 
     static void renderGui(GuiGraphics guiGraphics, HighlightStore.Snapshot snapshot) {
         String label = snapshot.label();
-        if (label == null || label.isBlank() || snapshot.highlights().isEmpty()) return;
+        if (label == null || label.isBlank() || (snapshot.highlights().isEmpty() && snapshot.entities().isEmpty())) return;
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.options.hideGui || minecraft.level == null) return;
 
@@ -107,7 +119,10 @@ final class HighlightRenderer {
                 sameDimension(highlight.dimension(), currentDimension)
                         && highlight.visibleAt() <= now
                         && highlight.expiresAt() > now);
-        if (!hasVisibleHighlight) return;
+        boolean hasVisibleEntity = snapshot.entities().stream().anyMatch(highlight ->
+                sameDimension(highlight.dimension(), currentDimension)
+                        && minecraft.level.getEntity(highlight.entityId()) != null);
+        if (!hasVisibleHighlight && !hasVisibleEntity) return;
 
         Font font = minecraft.font;
         int textWidth = font.width(label);

@@ -4,6 +4,24 @@ import { BlockHighlighter } from "./highlighter.js";
 import { runWithHighlighter } from "./context.js";
 
 describe("BlockCollection", () => {
+  test("collections forward a persistent lifetime and their owner's cleanup signal", async () => {
+    const highlighter = new BlockHighlighter();
+    const owner = new AbortController();
+    await runWithHighlighter({ highlighter }, async () => {
+      await [{ x: 1, y: 2, z: 3 }].toHighlightableBlocks().highlight("#ffffff", {
+        lifetime: "until-cleared", signal: owner.signal,
+      });
+      expect(highlighter.snapshot().highlights[0]?.expiresAt).toBeGreaterThan(Date.now() + 60_000);
+      await [].toHighlightableBlocks().highlight("#ffffff", { lifetime: "until-cleared", signal: owner.signal });
+      expect(highlighter.snapshot().highlights).toEqual([]);
+      await [{ x: 4, y: 5, z: 6 }].toHighlightableBlocks().highlight("#ffffff", {
+        lifetime: "until-cleared", signal: owner.signal,
+      });
+    });
+    owner.abort();
+    expect(highlighter.snapshot().highlights).toEqual([]);
+  });
+
   test("is a true Array containing blocks and supports array operations", () => {
     const b1 = { position: { x: 10, y: 64, z: 20 }, name: "sand" };
     const b2 = { position: { x: 11, y: 64, z: 20 }, name: "gravel" };

@@ -116,6 +116,67 @@ await blocks.highlight("#33ff61", { holdMs: 5_000 });
 Load a world with the mod installed before publishing the highlights. Coordinates
 must match the world being viewed. Colours use `#RRGGBB`.
 
+### Highlights that follow an action
+
+For a live target set, use an explicit lifetime and a signal owned by that work:
+
+```ts
+const targets = new AbortController();
+try {
+  await blocks.highlight("#33ff61", {
+    lifetime: "until-cleared",
+    signal: targets.signal,
+  });
+  // Publish replacements as the target set changes.
+} finally {
+  targets.abort();
+}
+```
+
+`until-cleared` publications remain until replaced, `highlighter.clearHighlights()`
+is called, or their signal aborts. Clearing removes the block label and geometry,
+not the navigation path. Replacing a publication releases the old signal listener,
+so an old owner's cancellation cannot erase newer highlights. Do not combine this
+lifetime with `holdMs` or `waitUntil: "expired"`. Existing timed highlights keep
+their current behavior. The feed retains its existing finite timestamp format,
+so companion viewers do not need an update for this capability.
+
+### Live blocks and entities without unwatched work
+
+Use `followHighlights(read, signal)` for a current selection. The package calls
+`read` only when a viewer requests `/debug/api/highlights`; there is no timer or
+background display work when nobody polls. Return the same frame object while
+unchanged, and create a new frame when your selection changes:
+
+```ts
+import type { HighlightFrame } from "@aibengineering/minecraft-block-highlighter";
+
+const lifetime = new AbortController();
+let selection: HighlightFrame = { label: "", blocks: [], entities: [] };
+highlighter.followHighlights(() => selection, lifetime.signal);
+
+selection = {
+  label: "Collecting an item",
+  blocks: [],
+  entities: [{ entityId: 42, colour: "#33ff61" }],
+};
+// On completion/cancellation: lifetime.abort();
+```
+
+For expensive conversion, retain your raw selection and build/cache the frame
+inside `read`. A viewer joining mid-action gets the latest state on its first
+poll. `snapshot()` itself is a passive read; embedded HTTP hosts should route
+requests through `handle()` to refresh live selections. Replacing the source or
+publishing ordinary highlights releases the previous owner's abort listener.
+Aborting clears both block and entity highlights, leaving the route independent.
+
+Entity IDs must belong to the same server/world the spectator is viewing.
+The mod resolves each ID locally and draws its interpolated bounding box; missing
+entities are skipped. Item movement needs no new host publication. Blocks and
+entities share the highlight count limit and the O toggle. Entity rendering
+requires the updated companion mod; older viewers still understand block boxes.
+The O toggle controls rendering only: a connected viewer continues polling.
+
 ### Attach to a bot
 
 For a bot emitting `path_update`, `goal_reached`, `path_stop`, and `end` events:
@@ -175,16 +236,20 @@ If nothing appears, check the feed URL in a browser, inspect `ready.error`, conf
 the world/dimension and coordinates, and check the N/O toggles. Highlights expire
 quickly by default (700 ms); use a longer `holdMs` while checking setup.
 
+For local multi-server viewing, set JVM property `blockhighlighter.serverPortOffset` to an integer (for example `10000`). The mod polls loopback at the connected Minecraft server port plus that offset and follows reconnects. Without it, `blockhighlighter.url` and its existing default remain unchanged. The feed host must use the same mapping.
+
 ## Behaviour and limits
 
 - Each publication replaces the previous block picture or route.
-- The feed defaults to 768 block highlights; the mod renders at most 768.
+- The feed defaults to 768 highlights, shared by blocks and entities; the mod
+  renders at most 768.
 - Route conversion inspects at most 512 input points including the bot origin;
   published routes contain at most 512 points. Longer routes show their beginning.
 - Highlights publish immediately by default. `waitUntil: "expired"` deliberately
   pauses the caller for the reveal and hold duration; use it only when wanted.
-- `scope()` samples whether a viewer polled recently. Disabled collections skip
-  highlight work, but still retain their input and support ordinary array work.
+- `scope().enabled` reports whether a viewer polled recently, each time it is
+  read. Disabled collections skip highlight work, but still retain their input
+  and support ordinary array work.
 - Importing the package also installs the existing `toHighlightableBlocks` and
   `toBlockCollection` Array helpers. The explicit `blockCollection` factory is
   used above to make construction visible.

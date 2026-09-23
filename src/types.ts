@@ -15,6 +15,23 @@ export interface BlockHighlight {
   colour: BlockColour;
 }
 
+/** Entity IDs belong to the connected Minecraft world; the viewer follows their live bounds. */
+export interface EntityHighlight {
+  entityId: number;
+  colour: BlockColour;
+}
+
+/** One current selection, replacing both its block and entity highlights together. */
+export interface HighlightFrame {
+  label: string;
+  blocks: BlockHighlight[];
+  entities: EntityHighlight[];
+}
+
+export interface PublishedEntityHighlight extends EntityHighlight {
+  dimension?: string;
+}
+
 /**
  * A route through the world, drawn as a line rather than as a set of cells.
  *
@@ -57,6 +74,7 @@ export interface BlockHighlighterFeedSnapshot {
   label?: string;
   revision: number;
   highlights: BlockHighlighterPublishedHighlight[];
+  entities: PublishedEntityHighlight[];
   path: PublishedPath | null;
 }
 
@@ -86,6 +104,8 @@ export interface HighlightOptions {
   signal?: AbortSignal;
   step?: string;
   revealIntervalMs?: number;
+  /** Persist until replaced, explicitly cleared, or signal aborts. Incompatible with holdMs/waitUntil: expired. */
+  lifetime?: "until-cleared";
   /**
    * How long the highlight stays up once it has finished revealing. The caller
    * knows what the highlight is for — a glance at one block or a look at a

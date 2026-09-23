@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 
 /** Asynchronous local polling; the render loop only reads an immutable snapshot. */
 final class HighlightStore {
@@ -27,7 +28,8 @@ final class HighlightStore {
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofMillis(250))
             .build();
-    private final URI endpoint = URI.create(System.getProperty("blockhighlighter.url", DEFAULT_ENDPOINT));
+    private final URI fixedEndpoint = URI.create(System.getProperty("blockhighlighter.url", DEFAULT_ENDPOINT));
+    private final Integer serverPortOffset = Integer.getInteger("blockhighlighter.serverPortOffset");
     private volatile Snapshot snapshot = Snapshot.empty();
     private boolean requestInFlight;
     private long nextPollAt;
@@ -47,6 +49,11 @@ final class HighlightStore {
         if (requestInFlight || now < nextPollAt) return;
         requestInFlight = true;
         nextPollAt = now + POLL_INTERVAL_MS;
+        URI endpoint = endpoint(minecraft);
+        if (endpoint == null) {
+            requestInFlight = false;
+            return;
+        }
         HttpRequest request = HttpRequest.newBuilder(endpoint)
                 .timeout(Duration.ofMillis(500))
                 .header("Accept", "application/json")
@@ -63,6 +70,16 @@ final class HighlightStore {
                         complete(requestGeneration, received);
                     });
                 });
+    }
+
+    /** Local test hosts can expose a feed per game port; reconnecting follows the viewed world. */
+    private URI endpoint(Minecraft minecraft) {
+        if (serverPortOffset == null) return fixedEndpoint;
+        var server = minecraft.getCurrentServer();
+        if (server == null) return null;
+        long port = (long) ServerAddress.parseString(server.ip).getPort() + serverPortOffset;
+        if (port < 1 || port > 65535) return null;
+        return URI.create("http://127.0.0.1:" + port + "/debug/api/highlights");
     }
 
     Snapshot snapshot() {
@@ -96,7 +113,7 @@ final class HighlightStore {
      */
     private static Snapshot parse(String body) {
         JsonObject root = JsonParser.parseString(body).getAsJsonObject();
-        return new Snapshot(string(root, "label", ""), highlights(root), path(root));
+        return new Snapshot(string(root, "label", ""), highlights(root), entities(root), path(root));
     }
 
     private static List<Highlight> highlights(JsonObject root) {
@@ -122,6 +139,24 @@ final class HighlightStore {
             }
         }
         return List.copyOf(highlights);
+    }
+
+    private static List<EntityHighlight> entities(JsonObject root) {
+        JsonArray values = array(root, "entities");
+        if (values == null) return List.of();
+        List<EntityHighlight> entities = new ArrayList<>();
+        for (JsonElement value : values) {
+            if (entities.size() >= MAX_HIGHLIGHTS) break;
+            if (!value.isJsonObject()) continue;
+            try {
+                JsonObject entity = value.getAsJsonObject();
+                entities.add(new EntityHighlight(entity.get("entityId").getAsInt(),
+                        Colour.parse(entity.get("colour").getAsString()), string(entity, "dimension", "")));
+            } catch (RuntimeException ignored) {
+                // A malformed entity must not hide the other targets.
+            }
+        }
+        return List.copyOf(entities);
     }
 
     /**
@@ -185,6 +220,8 @@ final class HighlightStore {
         }
     }
 
+    record EntityHighlight(int entityId, Colour colour, String dimension) {}
+
     record Highlight(int x, int y, int z, Colour colour, String dimension, long visibleAt, long expiresAt) {
     }
 
@@ -205,9 +242,9 @@ final class HighlightStore {
         }
     }
 
-    record Snapshot(String label, List<Highlight> highlights, Path path) {
+    record Snapshot(String label, List<Highlight> highlights, List<EntityHighlight> entities, Path path) {
         static Snapshot empty() {
-            return new Snapshot("", List.of(), null);
+            return new Snapshot("", List.of(), List.of(), null);
         }
     }
 }

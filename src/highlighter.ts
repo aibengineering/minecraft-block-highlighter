@@ -8,6 +8,8 @@ import type {
   BlockHighlighterOptions,
   BlockHighlighterPublishedHighlight,
   HighlightOptions,
+  HighlightFrame,
+  PublishedEntityHighlight,
 } from "./types.js";
 import { DEFAULT_BLOCK_HIGHLIGHTER_PORT, MAX_PATH_POINTS } from "./types.js";
 
@@ -45,6 +47,10 @@ export class BlockHighlighter {
   #revision = 0;
   #label = "";
   #highlights: BlockHighlighterPublishedHighlight[] = [];
+  #entities: PublishedEntityHighlight[] = [];
+  #readHighlights?: () => HighlightFrame;
+  #lastFrame?: HighlightFrame;
+  #releaseHighlightSignal?: () => void;
   #lastPolledAt = 0;
   #path: PublishedPath | null = null;
   #pathRevision = 0;
@@ -62,6 +68,7 @@ export class BlockHighlighter {
       label: this.#label,
       revision: this.#revision,
       highlights: this.#highlights,
+      entities: this.#entities,
       path: this.#path,
     };
   }
@@ -87,9 +94,55 @@ export class BlockHighlighter {
     this.#pathRevision += 1;
   }
 
+  /** Clear block/entity geometry and its source without changing the navigation path. */
+  clearHighlights(): void {
+    this.#releaseHighlightSignal?.();
+    this.#releaseHighlightSignal = undefined;
+    this.#readHighlights = undefined;
+    this.#lastFrame = undefined;
+    if (this.#highlights.length === 0 && this.#entities.length === 0 && this.#label === "") return;
+    this.#highlights = [];
+    this.#entities = [];
+    this.#label = "";
+    this.#revision += 1;
+  }
+
+  /**
+   * Read a live selection only when a viewer polls. Return the same frame object
+   * while unchanged to skip serialization preparation. No viewer means no calls
+   * to read, and a late viewer immediately receives the current selection.
+   */
+  followHighlights(read: () => HighlightFrame, signal: AbortSignal): void {
+    signal.throwIfAborted();
+    this.clearHighlights();
+    this.#readHighlights = read;
+    const clear = () => this.clearHighlights();
+    signal.addEventListener("abort", clear, { once: true });
+    this.#releaseHighlightSignal = () => signal.removeEventListener("abort", clear);
+  }
+
+  private refreshHighlights(): void {
+    if (!this.#readHighlights) return;
+    const frame = this.#readHighlights();
+    if (frame === this.#lastFrame) return;
+    const dimension = this.#currentDimension();
+    this.#highlights = frame.blocks.slice(0, this.maxHighlights).map((block) => ({
+      ...block, dimension, visibleAt: 0, expiresAt: Number.MAX_SAFE_INTEGER,
+    }));
+    this.#entities = frame.entities.slice(0, this.maxHighlights - this.#highlights.length)
+      .map((entity) => ({ ...entity, dimension }));
+    this.#label = frame.label;
+    this.#lastFrame = frame;
+    this.#revision += 1;
+  }
+
   async publish(highlights: BlockHighlight[], options: PublishOptions = {}): Promise<void> {
     const signal = options.signal;
     signal?.throwIfAborted();
+    const persistent = options.lifetime === "until-cleared";
+    if (persistent && (options.holdMs !== undefined || options.waitUntil === "expired")) {
+      throw new Error("until-cleared highlights cannot have holdMs or waitUntil: expired");
+    }
 
     const revealIntervalMs = options.revealIntervalMs ?? 0;
 
@@ -99,7 +152,17 @@ export class BlockHighlighter {
     const source = highlights.slice(0, this.maxHighlights);
     const revealDurationMs = Math.max(0, source.length - 1) * revealIntervalMs;
     const holdMs = options.holdMs ?? DEFAULT_HOLD_MS;
-    const expiresAt = now + revealDurationMs + holdMs;
+    // Preserve the finite timestamp wire format understood by existing viewers.
+    // Persistent publications are retired by replacement/clear, never by a timer.
+    const expiresAt = persistent ? Number.MAX_SAFE_INTEGER : now + revealDurationMs + holdMs;
+
+    // A previous owner's later cancellation must not erase its replacement.
+    this.#releaseHighlightSignal?.();
+    this.#releaseHighlightSignal = undefined;
+
+    this.#readHighlights = undefined;
+    this.#lastFrame = undefined;
+    this.#entities = [];
 
     this.#highlights = source.map((block, index) => ({
       x: block.x,
@@ -111,6 +174,12 @@ export class BlockHighlighter {
       expiresAt,
     }));
     this.#revision += 1;
+
+    if (persistent && signal) {
+      const clear = () => this.clearHighlights();
+      signal.addEventListener("abort", clear, { once: true });
+      this.#releaseHighlightSignal = () => signal.removeEventListener("abort", clear);
+    }
 
     if (options.waitUntil !== "expired") return;
 
@@ -154,7 +223,8 @@ export class BlockHighlighter {
 
   /** The ambient context for one run, so callers need no highlighting vocabulary. */
   scope(signal?: AbortSignal): AmbientHighlighterContext {
-    return { enabled: this.listening(), highlighter: this, signal };
+    const highlighter = this;
+    return { get enabled() { return highlighter.listening(); }, highlighter, signal };
   }
 
   /**
@@ -166,6 +236,14 @@ export class BlockHighlighter {
     const { pathname } = new URL(url, "http://127.0.0.1");
     if (pathname === HIGHLIGHTS_PATH && method === "GET") {
       this.observePoll();
+      try {
+        this.refreshHighlights();
+      } catch {
+        // A broken optional display source must not escape the HTTP handler and
+        // terminate its host. Detach it once; later polls remain harmless.
+        this.clearHighlights();
+        return { status: 500, body: { error: "Highlight source failed and was detached." } };
+      }
       return { status: 200, body: this.snapshot() };
     }
     return null;
